@@ -275,7 +275,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               const lowerInput = emailOrId.toLowerCase();
               for (const account of MailServices.accounts.accounts) {
                 for (const identity of account.identities) {
-                  if (identity.key === emailOrId || identity.email.toLowerCase() === lowerInput) {
+                  if (identity.key === emailOrId || (identity.email || "").toLowerCase() === lowerInput) {
                     return identity;
                   }
                 }
@@ -309,6 +309,44 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 }
               }
               return result;
+            }
+
+            function escapeHtml(s) {
+              return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            }
+
+            /**
+             * Converts body text to HTML for compose fields.
+             * Handles both HTML input (entity-encodes non-ASCII) and plain text.
+             */
+            function formatBodyHtml(body, isHtml) {
+              if (isHtml) {
+                let text = (body || "").replace(/\n/g, '');
+                text = [...text].map(c => c.codePointAt(0) > 127 ? `&#${c.codePointAt(0)};` : c).join('');
+                return text;
+              }
+              return escapeHtml(body || "").replace(/\n/g, '<br>');
+            }
+
+            /**
+             * Sets compose identity from `from` param or falls back to default.
+             * Returns warning string if `from` was specified but not found.
+             */
+            function setComposeIdentity(msgComposeParams, from, fallbackServer) {
+              const identity = findIdentity(from);
+              if (identity) {
+                msgComposeParams.identity = identity;
+                return "";
+              }
+              // Fallback to default identity for the account
+              if (fallbackServer) {
+                const account = MailServices.accounts.findAccountForServer(fallbackServer);
+                if (account) msgComposeParams.identity = account.defaultIdentity;
+              } else {
+                const defaultAccount = MailServices.accounts.defaultAccount;
+                if (defaultAccount) msgComposeParams.identity = defaultAccount.defaultIdentity;
+              }
+              return from ? `unknown identity: ${from}, using default` : "";
             }
 
             function searchMessages(query, startDate, endDate, maxResults, sortOrder) {
@@ -540,20 +578,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 composeFields.bcc = bcc || "";
                 composeFields.subject = subject || "";
 
-                if (isHtml) {
-                  let bodyText = (body || "").replace(/\n/g, '');
-                  // Convert non-ASCII to HTML entities (handles emojis > U+FFFF)
-                  bodyText = [...bodyText].map(c => c.codePointAt(0) > 127 ? `&#${c.codePointAt(0)};` : c).join('');
-                  composeFields.body = bodyText.includes('<html')
-                    ? bodyText
-                    : `<html><head><meta charset="UTF-8"></head><body>${bodyText}</body></html>`;
+                const formatted = formatBodyHtml(body, isHtml);
+                if (isHtml && formatted.includes('<html')) {
+                  composeFields.body = formatted;
                 } else {
-                  const htmlBody = (body || "")
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    .replace(/\n/g, '<br>');
-                  composeFields.body = `<html><body>${htmlBody}</body></html>`;
+                  composeFields.body = `<html><head><meta charset="UTF-8"></head><body>${formatted}</body></html>`;
                 }
 
                 // Add file attachments
@@ -563,20 +592,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 msgComposeParams.format = Ci.nsIMsgCompFormat.HTML;
                 msgComposeParams.composeFields = composeFields;
 
-                // Set identity (from parameter or default)
-                const identity = findIdentity(from);
-                if (identity) {
-                  msgComposeParams.identity = identity;
-                } else {
-                  const defaultAccount = MailServices.accounts.defaultAccount;
-                  if (defaultAccount) {
-                    msgComposeParams.identity = defaultAccount.defaultIdentity;
-                  }
-                }
+                const identityWarning = setComposeIdentity(msgComposeParams, from, null);
 
                 msgComposeService.OpenComposeWindowWithParams(null, msgComposeParams);
 
                 let msg = "Compose window opened";
+                if (identityWarning) msg += ` (${identityWarning})`;
                 if (attResult.failed.length > 0) {
                   msg += ` (failed to attach: ${attResult.failed.join(", ")})`;
                 }
@@ -648,17 +669,23 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
                       if (replyAll) {
                         composeFields.to = to || msgHdr.author;
-                        // Combine original recipients and CC list, filter out own address
+                        // Combine original recipients and CC, filter out own address
+                        // Split on commas not inside quotes to handle "Last, First" <email>
+                        const splitAddresses = (s) => (s || "").match(/(?:[^,"]|"[^"]*")+/g) || [];
+                        const extractEmail = (s) => (s.match(/<([^>]+)>/)?.[1] || s.trim()).toLowerCase();
+                        // Get own email from the account identity for accurate self-filtering
+                        const ownAccount = MailServices.accounts.findAccountForServer(folder.server);
+                        const ownEmail = (ownAccount?.defaultIdentity?.email || "").toLowerCase();
                         const allRecipients = [
-                          ...(msgHdr.recipients || "").split(","),
-                          ...(msgHdr.ccList || "").split(",")
+                          ...splitAddresses(msgHdr.recipients),
+                          ...splitAddresses(msgHdr.ccList)
                         ]
                           .map(r => r.trim())
-                          .filter(r => r && !r.includes(folder.server.username));
+                          .filter(r => r && (!ownEmail || extractEmail(r) !== ownEmail));
                         // Deduplicate by email address
                         const seen = new Set();
                         const uniqueRecipients = allRecipients.filter(r => {
-                          const email = r.match(/<([^>]+)>/)?.[1]?.toLowerCase() || r.toLowerCase();
+                          const email = extractEmail(r);
                           if (seen.has(email)) return false;
                           seen.add(email);
                           return true;
@@ -686,26 +713,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       const dateStr = msgHdr.date ? new Date(msgHdr.date / 1000).toLocaleString() : "";
                       const author = msgHdr.mime2DecodedAuthor || msgHdr.author || "";
                       const quotedLines = originalBody.split('\n').map(line =>
-                        `&gt; ${line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}`
+                        `&gt; ${escapeHtml(line)}`
                       ).join('<br>');
-                      const quoteBlock = `<br><br>On ${dateStr}, ${author.replace(/</g, '&lt;').replace(/>/g, '&gt;')} wrote:<br>${quotedLines}`;
+                      const quoteBlock = `<br><br>On ${dateStr}, ${escapeHtml(author)} wrote:<br>${quotedLines}`;
 
-                      // Build reply body with quoted original
-                      let replyHtml;
-                      if (isHtml) {
-                        let bodyText = (body || "").replace(/\n/g, '');
-                        bodyText = [...bodyText].map(c => c.codePointAt(0) > 127 ? `&#${c.codePointAt(0)};` : c).join('');
-                        replyHtml = `<html><head><meta charset="UTF-8"></head><body>${bodyText}${quoteBlock}</body></html>`;
-                      } else {
-                        const htmlBody = (body || "")
-                          .replace(/&/g, '&amp;')
-                          .replace(/</g, '&lt;')
-                          .replace(/>/g, '&gt;')
-                          .replace(/\n/g, '<br>');
-                        replyHtml = `<html><head><meta charset="UTF-8"></head><body>${htmlBody}${quoteBlock}</body></html>`;
-                      }
-
-                      composeFields.body = replyHtml;
+                      composeFields.body = `<html><head><meta charset="UTF-8"></head><body>${formatBodyHtml(body, isHtml)}${quoteBlock}</body></html>`;
 
                       // Add file attachments
                       const attResult = addAttachments(composeFields, attachments);
@@ -714,20 +726,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       msgComposeParams.format = Ci.nsIMsgCompFormat.HTML;
                       msgComposeParams.composeFields = composeFields;
 
-                      // Set identity (from parameter or default for account)
-                      const identity = findIdentity(from);
-                      if (identity) {
-                        msgComposeParams.identity = identity;
-                      } else {
-                        const account = MailServices.accounts.findAccountForServer(folder.server);
-                        if (account) {
-                          msgComposeParams.identity = account.defaultIdentity;
-                        }
-                      }
+                      const identityWarning = setComposeIdentity(msgComposeParams, from, folder.server);
 
                       msgComposeService.OpenComposeWindowWithParams(null, msgComposeParams);
 
                       let msg = "Reply window opened";
+                      if (identityWarning) msg += ` (${identityWarning})`;
                       if (attResult.failed.length > 0) {
                         msg += ` (failed to attach: ${attResult.failed.join(", ")})`;
                       }
@@ -813,35 +817,17 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       const fwdAuthor = msgHdr.mime2DecodedAuthor || msgHdr.author || "";
                       const fwdSubject = msgHdr.mime2DecodedSubject || msgHdr.subject || "";
                       const fwdRecipients = msgHdr.mime2DecodedRecipients || msgHdr.recipients || "";
-                      const escapedBody = originalBody
-                        .replace(/&/g, '&amp;')
-                        .replace(/</g, '&lt;')
-                        .replace(/>/g, '&gt;')
-                        .replace(/\n/g, '<br>');
+                      const escapedBody = escapeHtml(originalBody).replace(/\n/g, '<br>');
 
                       const forwardBlock = `-------- Forwarded Message --------<br>` +
-                        `Subject: ${fwdSubject.replace(/</g, '&lt;').replace(/>/g, '&gt;')}<br>` +
+                        `Subject: ${escapeHtml(fwdSubject)}<br>` +
                         `Date: ${dateStr}<br>` +
-                        `From: ${fwdAuthor.replace(/</g, '&lt;').replace(/>/g, '&gt;')}<br>` +
-                        `To: ${fwdRecipients.replace(/</g, '&lt;').replace(/>/g, '&gt;')}<br><br>` +
+                        `From: ${escapeHtml(fwdAuthor)}<br>` +
+                        `To: ${escapeHtml(fwdRecipients)}<br><br>` +
                         escapedBody;
 
                       // Combine intro body + forward block
-                      let introHtml = "";
-                      if (body) {
-                        if (isHtml) {
-                          let bodyText = body.replace(/\n/g, '');
-                          bodyText = [...bodyText].map(c => c.codePointAt(0) > 127 ? `&#${c.codePointAt(0)};` : c).join('');
-                          introHtml = bodyText;
-                        } else {
-                          introHtml = body
-                            .replace(/&/g, '&amp;')
-                            .replace(/</g, '&lt;')
-                            .replace(/>/g, '&gt;')
-                            .replace(/\n/g, '<br>');
-                        }
-                        introHtml += '<br><br>';
-                      }
+                      const introHtml = body ? formatBodyHtml(body, isHtml) + '<br><br>' : "";
 
                       composeFields.body = `<html><head><meta charset="UTF-8"></head><body>${introHtml}${forwardBlock}</body></html>`;
 
@@ -849,13 +835,17 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       let origAttCount = 0;
                       if (aMimeMsg && aMimeMsg.allUserAttachments) {
                         for (const att of aMimeMsg.allUserAttachments) {
-                          const attachment = Cc["@mozilla.org/messengercompose/attachment;1"]
-                            .createInstance(Ci.nsIMsgAttachment);
-                          attachment.url = att.url;
-                          attachment.name = att.name;
-                          attachment.contentType = att.contentType;
-                          composeFields.addAttachment(attachment);
-                          origAttCount++;
+                          try {
+                            const attachment = Cc["@mozilla.org/messengercompose/attachment;1"]
+                              .createInstance(Ci.nsIMsgAttachment);
+                            attachment.url = att.url;
+                            attachment.name = att.name;
+                            attachment.contentType = att.contentType;
+                            composeFields.addAttachment(attachment);
+                            origAttCount++;
+                          } catch {
+                            // Skip unreadable original attachments
+                          }
                         }
                       }
 
@@ -867,20 +857,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       msgComposeParams.format = Ci.nsIMsgCompFormat.HTML;
                       msgComposeParams.composeFields = composeFields;
 
-                      // Set identity (from parameter or default for account)
-                      const identity = findIdentity(from);
-                      if (identity) {
-                        msgComposeParams.identity = identity;
-                      } else {
-                        const account = MailServices.accounts.findAccountForServer(folder.server);
-                        if (account) {
-                          msgComposeParams.identity = account.defaultIdentity;
-                        }
-                      }
+                      const identityWarning = setComposeIdentity(msgComposeParams, from, folder.server);
 
                       msgComposeService.OpenComposeWindowWithParams(null, msgComposeParams);
 
                       let msg = `Forward window opened with ${origAttCount + attResult.added} attachment(s)`;
+                      if (identityWarning) msg += ` (${identityWarning})`;
                       if (attResult.failed.length > 0) {
                         msg += ` (failed to attach: ${attResult.failed.join(", ")})`;
                       }
