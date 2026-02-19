@@ -2,10 +2,10 @@
 "use strict";
 
 /**
- * Thunderbird MCP Server Extension
- * Exposes email, calendar, and contacts via MCP protocol over HTTP.
+ * Thunderbird API Extension
+ * Exposes email, calendar, and contacts via JSON-RPC over HTTP.
  *
- * Architecture: MCP Client <-> mcp-bridge.cjs (stdio<->HTTP) <-> This extension (port 8765)
+ * Architecture: thunderbird-cli / thunderbird-api bridge --> This extension (port 8766)
  *
  * Key quirks documented inline:
  * - MIME header decoding (mime2Decoded* properties)
@@ -18,7 +18,7 @@ const resProto = Cc[
   "@mozilla.org/network/protocol;1?name=resource"
 ].getService(Ci.nsISubstitutingProtocolHandler);
 
-const MCP_PORT = 8765;
+const API_PORT = 8766;
 const DEFAULT_MAX_RESULTS = 50;
 const MAX_SEARCH_RESULTS_CAP = 200;
 const SEARCH_COLLECTION_CAP = 1000;
@@ -1324,26 +1324,10 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               (async () => {
                 try {
                   let result;
-                  switch (method) {
-                    case "tools/list":
-                      result = { tools };
-                      break;
-                    case "tools/call":
-                      if (!params?.name) {
-                        throw new Error("Missing tool name");
-                      }
-                      result = {
-                        content: [{
-                          type: "text",
-                          text: JSON.stringify(await callTool(params.name, params.arguments || {}), null, 2)
-                        }]
-                      };
-                      break;
-                    default:
-                      res.setStatusLine("1.1", 404, "Not Found");
-                      res.write(`Unknown method: ${method}`);
-                      res.finish();
-                      return;
+                  if (method === "listTools") {
+                    result = { tools };
+                  } else {
+                    result = await callTool(method, params || {});
                   }
                   res.setStatusLine("1.1", 200, "OK");
                   // charset=utf-8 is critical for proper emoji handling in responses
@@ -1362,11 +1346,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               })();
             });
 
-            server.start(MCP_PORT);
-            console.log(`Thunderbird API server listening on port ${MCP_PORT}`);
-            return { success: true, port: MCP_PORT };
+            server.start(API_PORT);
+            console.log(`Thunderbird API server listening on port ${API_PORT}`);
+            return { success: true, port: API_PORT };
           } catch (e) {
-            console.error("Failed to start MCP server:", e);
+            console.error("Failed to start API server:", e);
             return { success: false, error: e.toString() };
           }
         }

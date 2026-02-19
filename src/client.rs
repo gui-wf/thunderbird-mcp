@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::sanitize::sanitize_json;
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 
-const THUNDERBIRD_PORT: u16 = 8765;
+const THUNDERBIRD_PORT: u16 = 8766;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ThunderbirdClient {
@@ -59,7 +59,7 @@ impl ThunderbirdClient {
                     request.id.clone(),
                     -32603,
                     format!(
-                        "Connection failed: {}. Is Thunderbird running with the MCP extension?",
+                        "Connection failed: {}. Is Thunderbird running with the API extension?",
                         e
                     ),
                 );
@@ -94,17 +94,13 @@ impl ThunderbirdClient {
         }
     }
 
-    /// Call an MCP tool and return the parsed result value.
-    /// Unwraps the MCP content block structure and parses the inner JSON text.
+    /// Call a tool on the Thunderbird extension and return the result directly.
     pub fn call_tool(&self, name: &str, args: Value) -> Result<Value> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".into(),
             id: Some(Value::Number(1.into())),
-            method: "tools/call".into(),
-            params: Some(serde_json::json!({
-                "name": name,
-                "arguments": args,
-            })),
+            method: name.into(),
+            params: Some(args),
         };
 
         let response = self.send_raw(&request);
@@ -113,30 +109,6 @@ impl ThunderbirdClient {
             anyhow::bail!("{}", err.message);
         }
 
-        let result = response
-            .result
-            .context("No result in response")?;
-
-        // MCP wraps tool results in content blocks
-        if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
-            if let Some(text_block) = content.iter().find(|b| b.get("type") == Some(&Value::String("text".into()))) {
-                if let Some(text) = text_block.get("text").and_then(|t| t.as_str()) {
-                    // Parse inner JSON with sanitize fallback
-                    return match serde_json::from_str::<Value>(text) {
-                        Ok(v) => Ok(v),
-                        Err(_) => {
-                            let sanitized = sanitize_json(text);
-                            serde_json::from_str::<Value>(&sanitized)
-                                .or_else(|_| {
-                                    // Not valid JSON - return as raw string value
-                                    Ok(Value::String(text.to_string()))
-                                })
-                        }
-                    };
-                }
-            }
-        }
-
-        Ok(result)
+        response.result.context("No result in response")
     }
 }

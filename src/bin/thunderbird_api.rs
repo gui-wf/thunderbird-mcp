@@ -32,6 +32,56 @@ fn handle_locally(request: &JsonRpcRequest) -> Option<Option<JsonRpcResponse>> {
     }
 }
 
+/// Translate MCP tools/list and tools/call to the extension's direct JSON-RPC protocol.
+fn forward_to_extension(client: &ThunderbirdClient, request: &JsonRpcRequest) -> JsonRpcResponse {
+    match request.method.as_str() {
+        "tools/list" => {
+            let ext_request = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                id: request.id.clone(),
+                method: "listTools".into(),
+                params: None,
+            };
+            client.send_raw(&ext_request)
+        }
+        "tools/call" => {
+            let params = request.params.as_ref();
+            let name = params
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+            let arguments = params
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or(json!({}));
+
+            let ext_request = JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                id: request.id.clone(),
+                method: name.into(),
+                params: Some(arguments),
+            };
+            let ext_response = client.send_raw(&ext_request);
+
+            // Wrap result in MCP content blocks for the MCP client
+            if let Some(result) = ext_response.result {
+                JsonRpcResponse::success(
+                    ext_response.id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap_or_default()
+                        }]
+                    }),
+                )
+            } else {
+                ext_response
+            }
+        }
+        _ => client.send_raw(request),
+    }
+}
+
 fn main() {
     let client = ThunderbirdClient::new();
     let stdin = io::stdin();
@@ -79,8 +129,8 @@ fn main() {
             continue;
         }
 
-        // Forward to Thunderbird
-        let response = client.send_raw(&request);
+        // Forward to Thunderbird with MCP-to-direct protocol translation
+        let response = forward_to_extension(&client, &request);
         write_response(&stdout, &response);
     }
 }

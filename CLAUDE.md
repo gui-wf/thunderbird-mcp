@@ -1,18 +1,18 @@
 # Thunderbird API
 
-MCP server and CLI for Thunderbird email. Exposes 10 tools via a Thunderbird extension that runs an HTTP server on localhost:8765.
+MCP bridge and CLI for Thunderbird email. Exposes 10 tools via a Thunderbird extension that runs a JSON-RPC HTTP server on localhost:8766.
 
 ## Architecture
 
 ```
-MCP Client <--stdio--> thunderbird-api <--HTTP/JSON-RPC--> Thunderbird Extension (port 8765)
-thunderbird-cli --------HTTP/JSON-RPC-------------------->
+MCP Client <--stdio--> thunderbird-api (MCP<->JSON-RPC) <--HTTP/JSON-RPC--> Thunderbird Extension (port 8766)
+thunderbird-cli ---------------HTTP/JSON-RPC------------------------------>
 ```
 
 Three components:
-- **Extension** (`extension/`) - Thunderbird add-on with bundled HTTP server. All email logic lives in `extension/mcp_server/api.js`.
-- **MCP bridge** (`thunderbird-api`) - Rust binary. Translates MCP stdio protocol to HTTP.
-- **CLI** (`thunderbird-cli`) - Rust binary. Terminal interface with subcommands via clap.
+- **Extension** (`extension/`) - Thunderbird add-on with bundled HTTP server. Speaks plain JSON-RPC (method name = tool name, params = arguments, result = direct value). All email logic lives in `extension/mcp_server/api.js`.
+- **MCP bridge** (`thunderbird-api`) - Rust binary. Translates MCP stdio protocol to direct JSON-RPC calls to the extension.
+- **CLI** (`thunderbird-cli`) - Rust binary. Terminal interface with subcommands via clap. Calls extension directly via JSON-RPC.
 
 The bridge and CLI are thin HTTP clients (using ureq). All real work happens in the extension's `api.js`.
 
@@ -86,15 +86,15 @@ cargo build
 cargo test
 
 # Direct HTTP test (Thunderbird must be running)
-curl -s -X POST http://localhost:8765 \
+curl -s -X POST http://localhost:8766 \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools[].name'
+  -d '{"jsonrpc":"2.0","id":1,"method":"listTools"}' | jq '.result.tools[].name'
 
 # Test CLI
 thunderbird-cli accounts
 thunderbird-cli search "test" --max 3
 
-# Test MCP bridge
+# Test MCP bridge (translates MCP protocol to direct JSON-RPC)
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | cargo run --bin thunderbird-api
 ```
 
