@@ -11,7 +11,7 @@ fn handle_locally(request: &JsonRpcRequest) -> Option<Option<JsonRpcResponse>> {
             json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {} },
-                "serverInfo": { "name": "thunderbird-api", "version": "0.3.0" }
+                "serverInfo": { "name": "thunderbird-bridge", "version": "0.4.0" }
             }),
         ))),
 

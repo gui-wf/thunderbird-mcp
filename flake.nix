@@ -1,5 +1,5 @@
 {
-  description = "MCP server and CLI for Thunderbird - AI assistant access to email, contacts, and calendars";
+  description = "Bridge and CLI for Thunderbird - access to email, contacts, and calendars";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -24,7 +24,7 @@
 
           thunderbird-api = pkgs.rustPlatform.buildRustPackage {
             pname = "thunderbird-api";
-            version = "0.3.0";
+            version = "0.4.0";
             src = pkgs.lib.cleanSourceWith {
               src = ./.;
               filter =
@@ -33,7 +33,7 @@
             };
             cargoLock.lockFile = ./Cargo.lock;
             meta = with pkgs.lib; {
-              description = "MCP bridge and CLI for Thunderbird email";
+              description = "Bridge and CLI for Thunderbird email";
               license = licenses.mit;
               mainProgram = "thunderbird-api";
             };
@@ -41,7 +41,7 @@
 
           thunderbird-api-extension = pkgs.stdenvNoCC.mkDerivation {
             pname = "thunderbird-api-extension";
-            version = "0.3.0";
+            version = "0.4.0";
             src = ./extension;
 
             dontBuild = true;

@@ -1,8 +1,9 @@
 {
   "manifest_version": 2,
-  "name": "Thunderbird MCP",
-  "version": "0.3",
-  "description": "MCP server for AI assistants to access email, contacts, and calendars",
+  "name": "Thunderbird Bridge",
+  "version": "0.4",
+  "author": "gui-wf",
+  "description": "JSON-RPC bridge for CLI and AI access to email, contacts, and calendars",
   "browser_specific_settings": {
     "gecko": {
       "id": "thunderbird-api@luthriel.dev",

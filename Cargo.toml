@@ -1,9 +1,9 @@
 [package]
 name = "thunderbird-api"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
-description = "MCP bridge and CLI for Thunderbird email"
+description = "Bridge and CLI for Thunderbird email"
 
 [[bin]]
 name = "thunderbird-api"
