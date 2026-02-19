@@ -1015,13 +1015,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       composeFields.references = `<${messageId}>`;
                       composeFields.setHeader("In-Reply-To", `<${messageId}>`);
 
-                      // Build quoted text block
+                      // Build quoted text block using blockquote for proper Thunderbird rendering
                       const dateStr = msgHdr.date ? new Date(msgHdr.date / 1000).toLocaleString() : "";
                       const author = msgHdr.mime2DecodedAuthor || msgHdr.author || "";
-                      const quotedLines = originalBody.split('\n').map(line =>
-                        `&gt; ${escapeHtml(line)}`
-                      ).join('<br>');
-                      const quoteBlock = `<br><br>On ${dateStr}, ${escapeHtml(author)} wrote:<br>${quotedLines}`;
+                      const quotedContent = escapeHtml(originalBody).replace(/\n/g, '<br>');
+                      const quoteBlock = `<br><br>On ${dateStr}, ${escapeHtml(author)} wrote:<br><blockquote type="cite">${quotedContent}</blockquote>`;
 
                       composeFields.body = `<html><head><meta charset="UTF-8"></head><body>${formatBodyHtml(body, isHtml)}${quoteBlock}</body></html>`;
 
